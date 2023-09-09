@@ -43,7 +43,6 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "timer_u32.h"
 
 #include "driver/i2s.h"
 
@@ -57,21 +56,11 @@ typedef struct {
 } inference_t;
 
 static inference_t inference;
-static const uint32_t sample_buffer_size = 1024;
-static signed short sampleBuffer[sample_buffer_size];
-uint32_t bufferPointer = 0;
 static bool debug_nn = false ; // Set this to true to see e.g. features generated from the raw signal
 static int print_results = -(EI_CLASSIFIER_SLICES_PER_MODEL_WINDOW);
 static bool record_status = true;
 
-#define AUDIO_BUFFER_MAX 16000
-bool transmitNow = false;
-// hw_timer_t * timer = NULL;
-// portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED; 
-// uint8_t audioBuffer[AUDIO_BUFFER_MAX];
-// uint8_t transmitBuffer[AUDIO_BUFFER_MAX];
-
-
+hw_timer_t *timer = NULL;
 static void audio_inference_callback(uint32_t n_bytes);
 static int microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr);
 static bool microphone_inference_record(void);
@@ -79,6 +68,7 @@ static bool microphone_inference_start(uint32_t n_samples);
 /**
  * @brief      Arduino setup function
  */
+
 void setup()
 {
     // put your setup code here, to run once:
@@ -114,16 +104,11 @@ void setup()
  */
 void loop()
 {
-    // uint64_t t0, dt;
-    // t0 = timer_u32();
     bool m = microphone_inference_record();
     if (!m) {
         ei_printf("ERR: Failed to record audio...\n");
         return;
     }
-    // dt = timer_u32() - t0;
-    // ei_printf("%f\n", timer_delta_s(dt));
-    // Serial.write((uint8_t*)inference.buffers[inference.buf_select ^ 1], inference.n_samples);
 
     signal_t signal;
     signal.total_length = EI_CLASSIFIER_SLICE_SIZE;
@@ -163,130 +148,29 @@ void loop()
     }
 }
 
-static void audio_inference_callback(uint32_t n_bytes)
-{
-    // signed short min = 32767;
-    // signed short max = -32768;
-    // for (int i = 0; i < n_bytes; i++) {
-    //     if (sampleBuffer[i] < min) {
-    //         min = sampleBuffer[i];
-    //     }
-    //     if (sampleBuffer[i] > max) {
-    //         max = sampleBuffer[i];
-    //     }
-    // }
-    // ei_printf("%d %d\n", min, max);
-    for(int i = 0; i < n_bytes; i++) {
-        inference.buffers[inference.buf_select][inference.buf_count++] = (uint8_t) sampleBuffer[i]; //map(sampleBuffer[i], min , max, 0, 255);//map(sampleBuffer[i], min, max, -98, 97);
-        if(inference.buf_count >= inference.n_samples) {
-            // ei_printf("%d\n", sampleBuffer[i]);
-            inference.buf_select ^= 1;
-            inference.buf_count = 0;
-            inference.buf_ready = 1;
-        }
-    }
-}
-
-// void IRAM_ATTR onTimer() {
-//   portENTER_CRITICAL_ISR(&timerMux); // says that we want to run critical code and don't want to be interrupted
-//   int adcVal = adc1_get_raw(ADC1_CHANNEL_6); // reads the ADC
-//   uint8_t value = map(adcVal, 0 , 4096, 0, 255);  // converts the value to 0..255 (8bit)
-//   audioBuffer[bufferPointer] = value; // stores the value
-//   bufferPointer++;
- 
-//   if (bufferPointer == AUDIO_BUFFER_MAX) { // when the buffer is full
-//     bufferPointer = 0;
-//     memcpy(transmitBuffer, audioBuffer, AUDIO_BUFFER_MAX); // copy buffer into a second buffer
-//     transmitNow = true; // sets the value true so we know that we can transmit now
-//   }
-//   portEXIT_CRITICAL_ISR(&timerMux); // says that we have run our critical code
-// }
-int adcVal;
-signed short value;
-
-
 void IRAM_ATTR onTimer() {
     int adcVal = adc1_get_raw(ADC1_CHANNEL_6); // reads the ADC #TODO
     int8_t value = map(adcVal, 0 , 4096, -128, 127);  // converts the value to 0..255 (8bit)
     inference.buffers[inference.buf_select][inference.buf_count++] = value;
     if(inference.buf_count >= inference.n_samples) {
-        // ei_printf("%d\n", sampleBuffer[i]);
         inference.buf_select ^= 1;
         inference.buf_count = 0;
         inference.buf_ready = 1;
     }
-//   audioBuffer[bufferPointer] = value; // stores the value
-//   bufferPointer++;
- 
-}
-hw_timer_t *timer = NULL;
-static void capture_samples(void* arg) { 
-    // portENTER_CRITICAL_ISR(&timerMux); 
-    const int32_t i2s_bytes_to_read = (uint32_t)arg;
-    size_t bytes_read = i2s_bytes_to_read;
-
-    timer = timerBegin(0, 80, true); // 80 Prescaler
-    timerAttachInterrupt(timer, &onTimer, true); // binds the handling function to our timer 
-    timerAlarmWrite(timer, 125, true);
-    timerAlarmEnable(timer);
-    // while (record_status) {
-    //    delay(100);
-    // }
-    vTaskDelete(NULL);
-
 }
 
+// static void capture_samples(void* arg) { 
+//     const int32_t i2s_bytes_to_read = (uint32_t)arg;
+//     size_t bytes_read = i2s_bytes_to_read;
 
-static void capture_samples1(void* arg) {
-    
-    // timer = timerBegin(0, 80, true); // 80 Prescaler
-    // timerAttachInterrupt(timer, &onTimer, true); // binds the handling function to our timer 
-    // timerAlarmWrite(timer, 125, true);
-    // timerAlarmEnable(timer);
+//     timer = timerBegin(0, 80, true); // 80 Prescaler
+//     timerAttachInterrupt(timer, &onTimer, true); // binds the handling function to our timer 
+//     timerAlarmWrite(timer, 125, true);
+//     timerAlarmEnable(timer);
+//     vTaskDelete(NULL);
 
-    const int32_t i2s_bytes_to_read = (uint32_t)arg;
-    size_t bytes_read = i2s_bytes_to_read;
-    
-    uint64_t last_read = 0, current_read;
-    uint32_t beatTime = (uint32_t) (1000000/8000);
-    // unsigned long time_diff;
+// }
 
-    while (record_status) {
-        // if (transmitNow) {
-        //     transmitNow = false;
-
-        //     audio_inference_callback(AUDIO_BUFFER_MAX);
-        // }
-        last_read = timer_u32();
-        for (int i = 0; i < i2s_bytes_to_read; i++) {
-            adcVal = adc1_get_raw(ADC1_CHANNEL_6);
-            // value = (int8_t) map(adcVal, 0 , 4096, -128, 127);
-            value = (signed short) map(adcVal, 0 , 4096, 0, 255);
-            // ei_printf("%d ", value);
-            sampleBuffer[i] = value;
-            // sampleBuffer[i] = ;
-            // current_read = timer_u32();
-            // ei_printf("%d %d\n", current_read, last_read);
-            // time_diff = micros() - last_read;
-            // while (timer_delta_us(timer_u32() - last_read) < beatTime);
-            // if (time_diff < beatTime) {
-            // // //     // ei_printf("%d\n", (beatTime - time_diff));
-            // // // //     // vTaskDelay((beatTime - time_diff)/1000/portTICK_PERIOD_MS);
-
-            //     delayMicroseconds((uint32_t)(beatTime - micros() + last_read));
-            // }
-            last_read = timer_u32();
-        }
-        if (record_status) {
-            // break;
-            audio_inference_callback(i2s_bytes_to_read);
-        }
-        else {
-            break;
-        }
-    }
-    vTaskDelete(NULL);
-}
 
 /**
  * @brief      Init inferencing struct and setup/start PDM
@@ -315,21 +199,16 @@ static bool microphone_inference_start(uint32_t n_samples)
     inference.n_samples = n_samples;
     inference.buf_ready = 0;
 
-    // if (i2s_init(EI_CLASSIFIER_FREQUENCY)) {
-    //     ei_printf("Failed to start I2S!");
-    // }
 
     ei_sleep(100);
 
     record_status = true;
-    // const int32_t i2s_bytes_to_read = (uint32_t)arg;
-    // size_t bytes_read = i2s_bytes_to_read;
 
-    // timer = timerBegin(0, 80, true); // 80 Prescaler
-    // timerAttachInterrupt(timer, &onTimer, true); // binds the handling function to our timer 
-    // timerAlarmWrite(timer, 125, true);
-    // timerAlarmEnable(timer);
-    xTaskCreate(capture_samples, "CaptureSamples", 1024*8, (void*)sample_buffer_size, 0, NULL);
+    timer = timerBegin(0, 80, true); // 80 Prescaler
+    timerAttachInterrupt(timer, &onTimer, true); // binds the handling function to our timer 
+    timerAlarmWrite(timer, 125, true);
+    timerAlarmEnable(timer);
+    // xTaskCreate(capture_samples, "CaptureSamples", 1024*8, (void*)sample_buffer_size, 0, NULL);
 
     return true;
 }
@@ -363,9 +242,6 @@ static bool microphone_inference_record(void)
  */
 static int microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr)
 {
-    //  for (int ix = 0; ix < length; ix++) {
-    //         ei_printf("%d\n", inference.buffers[inference.buf_select ^ 1][ix]<<8);
-    //     }
     numpy::int8_to_float(&inference.buffers[inference.buf_select ^ 1][offset], out_ptr, length);
 
     return 0;
